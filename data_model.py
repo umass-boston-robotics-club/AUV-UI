@@ -22,13 +22,17 @@ NUMERIC_COLUMNS = tuple(col for col in REQUIRED_COLUMNS if col != "phase")
 
 @dataclass
 class MissionData:
+    """A validated mission CSV and its derived metrics."""
     path: Path
     frame: pd.DataFrame
 
     @classmethod
     def from_csv(cls, filepath: str | Path) -> "MissionData":
-        """Read a mission CSV and raise ValueError if it violates our agreed schema."""
+        """Read a CSV, validate required mission fields, and return normalized data.
+        Raises ValueError if the file cannot be read or its contents are invalid."""
+        
         path = Path(filepath)
+        
         try:
             frame = pd.read_csv(path)
         except (OSError, pd.errors.ParserError, UnicodeError) as exc:
@@ -79,6 +83,7 @@ class MissionData:
 
     @property
     def phases(self) -> list[str]:
+        """Return distinct phase labels in order of first appearance."""
         return self.frame["phase"].drop_duplicates().tolist()
 
     @property
@@ -87,6 +92,7 @@ class MissionData:
         return float(z.min()), float(z.max())
 
     def subset(self, phase: str | None = None) -> pd.DataFrame:
+        """Return all samples or only those matching a phase."""
         if phase is None:
             return self.frame
         return self.frame.loc[self.frame["phase"] == phase].reset_index(drop=True)
