@@ -12,6 +12,7 @@ from PySide6.QtCore import QAbstractTableModel, QModelIndex, QTimer, Qt
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
+    QCheckBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -28,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from data_model import MissionData
+from data_model import MissionData, SensorData
 
 BG = "#0b1220"
 PANEL = "#111d30"
@@ -77,6 +78,7 @@ class Dashboard(QMainWindow):
     def __init__(self):
         super().__init__()
         self.mission: MissionData | None = None
+        self.sensor: SensorData | None = None
         self.view = pd.DataFrame()
         self.cursors: list[pg.InfiniteLine] = []
         self.marker = pg.ScatterPlotItem(size=13, pen=pg.mkPen("#ffffff", width=1), brush=YELLOW)
@@ -123,7 +125,7 @@ class Dashboard(QMainWindow):
         )
         return widget
 
-    def metric(self, title: str) -> tuple[QFrame, QLabel]:
+    def create_metric(self, title: str) -> tuple[QFrame, QLabel]:
         panel = QFrame()
         panel.setObjectName("metric")
         layout = QVBoxLayout(panel)
@@ -169,7 +171,7 @@ class Dashboard(QMainWindow):
             ("z", "Z position range"),
             ("phases", "Mission phases"),
         ]:
-            panel, value = self.metric(title)
+            panel, value = self.create_metric(title)
             self.metric_values[key] = value
             metric_row.addWidget(panel)
         outer.addLayout(metric_row)
@@ -230,6 +232,80 @@ class Dashboard(QMainWindow):
         replay_layout.addLayout(timeline)
         tabs.addTab(replay_tab, "Mission replay")
 
+        # A separate offline CSV can store water sensors independently of AUV motion.
+        sensor_tab = QWidget()
+        sensor_layout = QVBoxLayout(sensor_tab)
+        sensor_layout.setSpacing(12)
+
+        sensor_header = QHBoxLayout()
+        sensor_header.addWidget(self.label("SENSOR DATA", 17, TEXT, True))
+        self.sensor_file_label = self.label("No sensor CSV loaded", 12, MUTED)
+        sensor_header.addWidget(self.sensor_file_label, 1)
+        sensor_load_button = QPushButton("Open sensor CSV")
+        sensor_load_button.clicked.connect(self.choose_sensor_file)
+        sensor_header.addWidget(sensor_load_button)
+        sensor_layout.addLayout(sensor_header)
+
+        sensor_controls = QHBoxLayout()
+        sensor_controls.addWidget(self.label("View:", 12, MUTED))
+        self.sensor_mode_combo = QComboBox()
+        self.sensor_mode_combo.addItem("Time series", "time")
+        self.sensor_mode_combo.addItem("Depth profile", "depth")
+        self.sensor_mode_combo.currentIndexChanged.connect(self.draw_sensor_plots)
+        sensor_controls.addWidget(self.sensor_mode_combo)
+        sensor_controls.addSpacing(15)
+        sensor_controls.addWidget(self.label("Depth source:", 12, MUTED))
+        self.sensor_depth_combo = QComboBox()
+        self.sensor_depth_combo.addItem("Sensor CSV depth_m", "csv")
+        self.sensor_depth_combo.addItem("Mission -Z (negative Z is down)", "mission_minus_z")
+        self.sensor_depth_combo.addItem("Mission +Z (positive Z is down)", "mission_plus_z")
+        self.sensor_depth_combo.currentIndexChanged.connect(self.draw_sensor_plots)
+        self.sensor_depth_combo.setEnabled(False)
+        sensor_controls.addWidget(self.sensor_depth_combo)
+        sensor_controls.addStretch()
+        for col, title in (("temperature_c", "Temperature"), ("ph", "pH"), ("voltage_v", "Voltage")):
+            # Check boxes let viewers compare selected measurements side by side.
+            if not hasattr(self, "sensor_checks"):
+                self.sensor_checks = {}
+            check = QCheckBox(title)
+            check.setChecked(True)
+            check.toggled.connect(self.draw_sensor_plots)
+            self.sensor_checks[col] = check
+            sensor_controls.addWidget(check)
+        sensor_layout.addLayout(sensor_controls)
+
+        self.sensor_status = self.label(
+            "Load a sensor CSV with time, temperature, pH, and voltage; depth_m is optional.",
+            12, MUTED,
+        )
+        self.sensor_status.setWordWrap(True)
+        sensor_layout.addWidget(self.sensor_status)
+
+        sensor_graph_frame = QWidget()
+        sensor_graphs_layout = QHBoxLayout(sensor_graph_frame)
+        sensor_graphs_layout.setContentsMargins(0, 0, 0, 0)
+        sensor_graphs_layout.setSpacing(10)
+        self.sensor_series = [
+            ("temperature_c", "TEMPERATURE", "°C", "#38bdf8"),
+            ("ph", "PH", "pH", "#c084fc"),
+            ("voltage_v", "BATTERY VOLTAGE", "V", "#34d399"),
+        ]
+        self.sensor_plots = {}
+        for col, title, unit, _ in self.sensor_series:
+            plot = self.make_plot(title, "Time (s)", unit)
+            self.sensor_plots[col] = plot
+            sensor_graphs_layout.addWidget(plot, 1)
+        sensor_layout.addWidget(sensor_graph_frame, 3)
+
+        sensor_layout.addWidget(self.label("RAW SENSOR SAMPLES", 12, MUTED, True))
+        self.sensor_table_model = CsvTableModel()
+        sensor_table = QTableView()
+        sensor_table.setModel(self.sensor_table_model)
+        sensor_table.setAlternatingRowColors(True)
+        sensor_table.horizontalHeader().setStretchLastSection(True)
+        sensor_layout.addWidget(sensor_table, 1)
+        tabs.addTab(sensor_tab, "Sensor data")
+
         data_tab = QWidget()
         data_layout = QVBoxLayout(data_tab)
         data_layout.addWidget(self.label("RAW MISSION SAMPLES", 15, TEXT, True))
@@ -256,6 +332,83 @@ class Dashboard(QMainWindow):
         ))
         preflight_layout.addStretch()
         tabs.addTab(preflight_tab, "Preflight (future)")
+
+    def choose_sensor_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open AUV sensor CSV", str(Path.home()), "CSV files (*.csv)"
+        )
+        if path:
+            self.load_sensor(Path(path))
+
+    def load_sensor(self, path: Path):
+        try:
+            new_sensor = SensorData.from_csv(path)
+        except ValueError as exc:
+            QMessageBox.critical(self, "Invalid sensor CSV", str(exc))
+            self.statusBar().showMessage("Sensor load failed; previous data remains open")
+            return
+
+        self.sensor = new_sensor
+        self.sensor_file_label.setText(f"Loaded: {path.name}  •  {len(new_sensor.frame):,} samples")
+        self.sensor_table_model.set_frame(new_sensor.frame)
+        self.draw_sensor_plots()
+        self.statusBar().showMessage(f"Loaded sensor file: {path.name}")
+
+    def draw_sensor_plots(self, _change=None):
+        """Plot each selected sensor against elapsed time or positive-down depth."""
+        mode = self.sensor_mode_combo.currentData()
+        depth_mode = mode == "depth"
+        self.sensor_depth_combo.setEnabled(depth_mode)
+
+        for col, _, _, _ in self.sensor_series:
+            self.sensor_plots[col].clear()
+            self.sensor_plots[col].setVisible(self.sensor_checks[col].isChecked())
+
+        if self.sensor is None:
+            return
+
+        df = self.sensor.frame
+        depth = None
+        if depth_mode:
+            try:
+                depth = self.sensor.depth_for_profile(
+                    source=self.sensor_depth_combo.currentData(), mission=self.mission
+                )
+            except ValueError as exc:
+                self.sensor_status.setText(str(exc))
+                return
+            valid = pd.notna(depth)
+            count = int(valid.sum())
+            self.sensor_status.setText(
+                f"Depth increases downward • {count}/{len(df)} valid depth matches. "
+                "For mission Z: clocks must match; Z=0 must be the water surface."
+            )
+        else:
+            self.sensor_status.setText(
+                f"Time series • {len(df):,} sensor samples. Time is assumed to be elapsed seconds."
+            )
+
+        for col, _, unit, color in self.sensor_series:
+            plot = self.sensor_plots[col]
+            plot.getViewBox().invertY(depth_mode)
+            vals = df[col].to_numpy(dtype=float)
+            if depth_mode:
+                plot.setLabel("bottom", unit)
+                plot.setLabel("left", "Depth (m)")
+                # Point clouds (value vs. depth) resemble oceanographic profiles.
+                plot.plot(
+                    vals[valid], depth[valid], pen=None, symbol="o", symbolSize=6,
+                    symbolPen=None, symbolBrush=pg.mkBrush(color),
+                )
+            else:
+                plot.setLabel("bottom", "Time (s)")
+                plot.setLabel("left", unit)
+                plot.plot(
+                    df["time_s"].to_numpy(dtype=float), vals,
+                    pen=pg.mkPen(color, width=2), symbol="o", symbolSize=4,
+                    symbolPen=None, symbolBrush=pg.mkBrush(color),
+                )
+            plot.enableAutoRange()
 
     def choose_file(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -293,6 +446,8 @@ class Dashboard(QMainWindow):
             self.phase_combo.addItem(phase, phase)
         self.phase_combo.blockSignals(False)
         self.change_phase()
+        if self.sensor is not None and self.sensor_mode_combo.currentData() == "depth":
+            self.draw_sensor_plots()
         self.statusBar().showMessage(f"Loaded {path.name}: {len(df)} samples")
 
     def change_phase(self, _index=None):
