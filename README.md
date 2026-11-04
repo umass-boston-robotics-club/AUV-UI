@@ -24,12 +24,13 @@ py -3.10 -m venv .venv
 ```
 
 ## Mac OS setup (bash)
-
+```bash 
 python3.10 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python app.py
+```
 
 These commands **do not require activating** the virtual environment. If you installed a different supported Python version, use that instead of `-3.10`, e.g. `py -3.11`.
 
