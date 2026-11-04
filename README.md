@@ -72,3 +72,7 @@ The dashboard's 3D path length is the sum of Euclidean distances between success
 ## Future ROS 2 integration
 
 For offline missions, it will be possible to convert ROS 2 bag/topic data into the same CSV schema and the UI code does not need to change. For actual preflight checks, separate diagnostics interface (e.g. dedicated ROS 2 diagnostic topics or an explicit JSON diagnostics report).
+
+## UI File Guide Link:
+Below is a guide for the files of the UI:
+[AUV UI Guide Document](https://docs.google.com/document/d/1GlQA-GAuHGz8Y2VasjnnXrDphzfNobVdPikPbqB1cAY/edit?usp=sharing)
