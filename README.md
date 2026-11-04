@@ -28,6 +28,16 @@ This update adds a dedicated **Sensor data** tab to load and visualize measureme
 - **Sensor CSV validation:** Recognize several common column-header spellings, require numeric and finite measurements, reject duplicate/descending timestamps, and reject negative recorded depths.
 
 > **Important:** These graphs display values supplied in CSV files; they do not retrieve live readings from connected sensors. If deriving depth from mission Z, both files must use the same elapsed-seconds clock, mission `Z = 0` must represent the water surface, and the selected Z direction must be correct. Measurements outside the mission time range are not extrapolated.
+## Mac OS setup (bash)
+```bash 
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python app.py
+```
+
+These commands **do not require activating** the virtual environment. If you installed a different supported Python version, use that instead of `-3.10`, e.g. `py -3.11`.
 
 ## Changes in `feature/dashboard-updates`
 
